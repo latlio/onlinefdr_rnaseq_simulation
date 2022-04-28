@@ -1,6 +1,4 @@
-# Project Title
-
-Accompanying code for the "Online FDR in RNAseq" simulation study
+# Online FDR in RNASeq Simulation Study Code
 
 ## Description
 
