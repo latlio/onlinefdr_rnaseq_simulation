@@ -22,9 +22,11 @@ Code for Figures 1 and 2 will be shared upon request since it involves proprieta
 ```
 qsub -t 1-100 -N change_pi_sim ~/runr.sh run_change_pi_sim.R
 ```
--t is the range of simulation runs you want to do (e.g. 1-100 is 100 simulation runs)
--N is the name of the job
-runr.sh is the shell script that initializes the R script
+
+* -t is the range of simulation runs you want to do (e.g. 1-100 is 100 simulation runs)
+* -N is the name of the job
+* runr.sh is the shell script that initializes the R script
+* Note the Batch procedures are quite computationally heavy
 
 ## Authors
 
