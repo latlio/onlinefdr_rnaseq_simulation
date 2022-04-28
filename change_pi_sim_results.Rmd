@@ -1,0 +1,643 @@
+---
+title: "Changing the Proportion of Non-Nulls"
+subtitle: "Comparison of Offline and Online"
+author: "Lathan Liou"
+output: 
+  html_document:
+    keep_md: yes
+  pdf_document:
+    keep_md: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      dev = "tiff")
+library(tidyverse)
+library(data.table)
+library(ggsci)
+
+#load data
+all_pi_sim_data <- map(list.files(path = "change_pi_sim", 
+                          pattern = "change_pi_run_fc1.5",
+                          full.names = TRUE), readRDS)
+
+# Data Key
+## primary = power, fdr
+## secondary = tnr, ppv
+## component = tp, fp, tn, fn
+
+primary_means <- rbindlist(all_pi_sim_data)[,lapply(.SD, mean, na.rm = TRUE), list(pi)] %>%
+  select(pi, contains("power")|contains("fdr")) %>%
+  pivot_longer(cols = contains("power"),
+               names_to = "method",
+               names_prefix = "power_",
+               values_to = "power") %>%
+  pivot_longer(cols = contains("fdr"),
+               names_to = "method2",
+               names_prefix = "fdr_",
+               values_to = "fdr")
+
+primary_sds <- rbindlist(all_pi_sim_data)[,lapply(.SD, sd, na.rm = TRUE), list(pi)] %>%
+    select(pi, contains("power")|contains("fdr")) %>%
+    pivot_longer(cols = contains("power"),
+               names_to = "method",
+               names_prefix = "power_",
+               values_to = "power") %>%
+  pivot_longer(cols = contains("fdr"),
+               names_to = "method2",
+               names_prefix = "fdr_",
+               values_to = "fdr") %>%
+  rename(sd_power = power,
+         sd_fdr = fdr)
+
+primary_data <- bind_cols(primary_means, primary_sds %>% select(sd_power, sd_fdr)) %>%
+  mutate(lower_power = power - sd_power,
+         upper_power = power + sd_power,
+         lower_fdr = fdr - sd_fdr,
+         upper_fdr = fdr + sd_fdr,
+         method = case_when(method == "0.025" ~ "Uncorrected 0.025",
+                            method == "0.05" ~ "Uncorrected 0.05",
+                            method == "0.1" ~ "Uncorrected 0.1",
+                            method == "off_bh" ~ "Offline BH",
+                            method == "off_stbh" ~ "Offline StBH",
+                            method == "pool_bh" ~ "Pooled BH",
+                            method == "pool_stbh" ~ "Pooled StBH",
+                            method == "on_bh" ~ "BatchBH",
+                            method == "on_prds" ~ "BatchPRDS",
+                            method == "on_stbh" ~ "BatchStBH"),
+         method2 = case_when(method2 == "0.025" ~ "Uncorrected 0.025",
+                             method2 == "0.05" ~ "Uncorrected 0.05",
+                             method2 == "0.1" ~ "Uncorrected 0.1",
+                             method2 == "off_bh" ~ "Offline BH",
+                             method2 == "off_stbh" ~ "Offline StBH",
+                             method2 == "pool_bh" ~ "Pooled BH",
+                             method2 == "pool_stbh" ~ "Pooled StBH",
+                             method2 == "on_bh" ~ "BatchBH",
+                             method2 == "on_prds" ~ "BatchPRDS",
+                             method2 == "on_stbh" ~ "BatchStBH"),
+         online = as.factor(case_when(str_detect(method, "Batch") ~ "Yes",
+                            TRUE ~ "No")),
+         online2 = as.factor(case_when(str_detect(method2, "Batch") ~ "Yes",
+                            TRUE ~ "No")))
+
+# Set consistent Color Palette
+
+pal <- c("#C0392B", "#2980B9", "#EC7063", "#9B59B6", "#3498DB", "#F1C40F", "#16A085", "red", "#E67E22", "#34495E") %>%
+  setNames(unique(primary_data$method))
+
+# pal <- pal_npg("nrc")(10) %>%
+#   setNames(unique(primary_data$method))
+# 
+# pal <- scales::hue_pal()(10) %>% 
+#   setNames(unique(primary_data$method))
+```
+
+# Simulation Settings
+
+* RNAseq data was simulated as described in Soneson et. al. 2013 using the `compcodeR` package
+* A fold change of 1.5 and 5 samples were used 
+* limma-voom was the method used for differential expression (other data processing steps were selected based on accepted practices)
+* A batch size of 10000 was chosen to represent a Seq experiment (realistically, this number is closer to 20000)
+* An aggressive gammai sequence of $(0.5, 0.5, 0, ..., 0)$ was selected as per Trnic et. al.'s recommendation for large batch sizes
+* 100 trials were performed
+
+# Visualizing Power
+
+```{r change_prop_power_1.5_supp, fig.width = 12, fig.height = 8}
+ggplot(primary_data, aes(x = pi, y = power)) + 
+  geom_line(aes(col = method,
+                linetype = online)) + 
+  geom_ribbon(aes(ymin = lower_power, ymax = upper_power, fill = method), alpha = 0.2) + 
+  theme_bw() + 
+  ylim(c(0,1)) + 
+  labs(x = "Proportion of DE Genes",
+       y = "Power",
+       col = "Method",
+       linetype = "Online?") +
+  scale_color_manual(
+    values = pal
+  ) +
+  scale_fill_manual(
+    values = pal
+  ) +
+  guides(fill = "none",
+         color = guide_legend(override.aes = list(size = 12))) +
+  theme(legend.title = element_text(size = 16),
+        legend.text = element_text(size = 16),
+        axis.text.x = element_text(size = 16),
+        axis.title.x = element_text(size = 16),
+        axis.text.y = element_text(size = 16),
+        axis.title.y = element_text(size = 16))
+```
+```{r change_prop_power_1.5_supp2, fig.width = 12, fig.height = 8}
+ggplot(primary_data %>%
+         filter(!method %in% c("Uncorrected 0.025", "Uncorrected 0.05", "Uncorrected 0.1", "BatchPRDS")),
+       aes(x = pi, y = power)) + 
+  geom_line(aes(col = method,
+                linetype = online)) + 
+  geom_ribbon(aes(ymin = lower_power, ymax = upper_power, fill = method), alpha = 0.2) + 
+  theme_bw() + 
+  labs(x = "Proportion of DE Genes",
+       y = "Power",
+       col = "Method",
+       linetype = "Online?") +
+  scale_color_manual(
+    values = pal,
+    limits = force
+  ) +
+  scale_fill_manual(
+    values = pal
+  ) +
+  guides(fill = "none",
+         color = guide_legend(override.aes = list(size = 12))) +
+  xlim(0.1, 0.5) +
+  ylim(0.65, 0.9) +
+  theme(legend.title = element_text(size = 16),
+        legend.text = element_text(size = 16),
+        axis.text.x = element_text(size = 16),
+        axis.title.x = element_text(size = 16),
+        axis.text.y = element_text(size = 16),
+        axis.title.y = element_text(size = 16))
+```
+
+```{r change_prop_power_1.5, fig.width = 12, fig.height = 8}
+ggplot(primary_data %>%
+         filter(!method %in% c("Uncorrected 0.025", "Uncorrected 0.05", "Uncorrected 0.1")),
+       aes(x = pi, y = power)) + 
+  geom_line(aes(col = method,
+                linetype = online)) + 
+  geom_ribbon(aes(ymin = lower_power, ymax = upper_power, fill = method), alpha = 0.2) + 
+  theme_bw() + 
+  labs(x = "Proportion of DE Genes",
+       y = "Power",
+       col = "Method",
+       linetype = "Online?") +
+  scale_color_manual(
+    values = pal,
+    limits = force
+  ) +
+  scale_fill_manual(
+    values = pal
+  ) +
+  guides(fill = "none",
+         color = guide_legend(override.aes = list(size = 12))) +
+  theme(legend.title = element_text(size = 16),
+        legend.text = element_text(size = 16),
+        axis.text.x = element_text(size = 16),
+        axis.title.x = element_text(size = 16),
+        axis.text.y = element_text(size = 16),
+        axis.title.y = element_text(size = 16))
+```
+
+Observations:
+
+* PRDS is conservative
+* Pooled has greater power at $\pi$ less than $0.17$ but is surpassed by BatchStBH greater than $0.17$
+* BatchBH power approaches pooled power at higher $\pi$
+
+# Visualizing FDR
+
+```{r change_prop_fdr_1.5_supp, fig.width = 12, fig.height = 8}
+ggplot(primary_data %>% filter(pi > 0), aes(x = pi, y = fdr)) + 
+  geom_line(aes(col = method2,
+                linetype = online2)) + 
+  geom_ribbon(aes(ymin = lower_fdr, ymax = upper_fdr, fill = method2), alpha = 0.2) + 
+  theme_bw() + 
+  geom_hline(yintercept = 0.05, col = "black") +
+  labs(x = "Proportion of DE Genes",
+       y = "FDR",
+       col = "Method",
+       linetype = "Online?") +
+  scale_color_manual(
+    values = pal
+  ) +
+  scale_fill_manual(
+    values = pal
+  ) +
+  guides(fill = "none",
+         color = guide_legend(override.aes = list(size = 12))) +
+  theme(legend.title = element_text(size = 16),
+        legend.text = element_text(size = 16),
+        axis.text.x = element_text(size = 16),
+        axis.title.x = element_text(size = 16),
+        axis.text.y = element_text(size = 16),
+        axis.title.y = element_text(size = 16))
+```
+
+Let's zoom in:
+
+```{r change_prop_fdr_1.5, fig.width = 12, fig.height = 8}
+ggplot(primary_data %>% 
+         filter(!method2 %in% c("Uncorrected 0.025", "Uncorrected 0.05", "Uncorrected 0.1"),
+                pi != 0), aes(x = pi, y = fdr)) + 
+  geom_line(aes(col = method2,
+                linetype = online2)) + 
+  geom_ribbon(aes(ymin = lower_fdr, ymax = upper_fdr, fill = method2), alpha = 0.2) + 
+  theme_bw() + 
+  geom_hline(yintercept = 0.05, col = "black") +
+  labs(x = "Proportion of DE Genes",
+       y = "FDR",
+       col = "Method",
+       linetype = "Online?") +
+  scale_color_manual(
+    values = pal,
+    limits = force
+  ) +
+  scale_fill_manual(
+    values = pal
+  ) +
+  guides(fill = "none",
+         color = guide_legend(override.aes = list(size = 12))) +
+  theme(legend.title = element_text(size = 16),
+        legend.text = element_text(size = 16),
+        axis.text.x = element_text(size = 16),
+        axis.title.x = element_text(size = 16),
+        axis.text.y = element_text(size = 16),
+        axis.title.y = element_text(size = 16))
+```
+
+Observations:
+
+* FDR is controlled (at the nominal level of 0.05) for BatchBH and BatchPRDS
+* Both offline applications (naive and pooled BH) have widely variable control especially at low $\pi$, which results in failure to control FDR at nominal level.
+* BatchPRDS is also more variable at small $\pi$ but is overall very conservative, so it still controls FDR at nominal level. 
+* BatchStBH inflates FDR beyond $\pi = 0.4$
+
+# Visualizing PPV
+
+```{r}
+#prep PPV data
+secondary_means <- rbindlist(all_pi_sim_data)[,lapply(.SD, mean, na.rm = TRUE), list(pi)] %>%
+  select(pi, contains("ppv")) %>%
+  pivot_longer(cols = contains("ppv"),
+               names_to = "method",
+               names_prefix = "ppv_",
+               values_to = "ppv")
+
+secondary_sds <- rbindlist(all_pi_sim_data)[,lapply(.SD, sd, na.rm = TRUE), list(pi)] %>%
+  select(pi, contains("ppv")) %>%
+  pivot_longer(cols = contains("ppv"),
+               names_to = "method",
+               names_prefix = "ppv_",
+               values_to = "ppv") %>%
+  rename(sd_ppv = ppv)
+
+secondary_data <- bind_cols(secondary_means, secondary_sds %>% select(sd_ppv)) %>%
+  mutate(lower_ppv = ppv - sd_ppv,
+         upper_ppv = ppv + sd_ppv,
+         method = case_when(method == "0.025" ~ "Uncorrected 0.025",
+                            method == "0.05" ~ "Uncorrected 0.05",
+                            method == "0.1" ~ "Uncorrected 0.1",
+                            method == "off_bh" ~ "Offline BH",
+                            method == "off_stbh" ~ "Offline StBH",
+                            method == "pool_bh" ~ "Pooled BH",
+                            method == "pool_stbh" ~ "Pooled StBH",
+                            method == "on_bh" ~ "BatchBH",
+                            method == "on_prds" ~ "BatchPRDS",
+                            method == "on_stbh" ~ "BatchStBH"),
+         online = case_when(str_detect(method, "Batch") ~ "Yes",
+                            TRUE ~ "No"))
+```
+
+```{r change_prop_ppv_1.5_supp, fig.width = 12, fig.height = 8}
+ggplot(secondary_data %>% filter(pi > 0), aes(x = pi, y = ppv)) + 
+  geom_line(aes(col = method,
+                linetype = online)) + 
+  geom_ribbon(aes(ymin = lower_ppv, ymax = upper_ppv, fill = method), alpha = 0.2) + 
+  theme_bw() +
+  labs(x = "Proportion of DE Genes",
+       y = "PPV",
+       col = "Method",
+       linetype = "Online?") +
+  scale_color_manual(
+    values = pal
+  ) +
+  scale_fill_manual(
+    values = pal
+  ) +
+  guides(fill = "none",
+         color = guide_legend(override.aes = list(size = 12))) +
+  theme(legend.title = element_text(size = 16),
+        legend.text = element_text(size = 16),
+        axis.text.x = element_text(size = 16),
+        axis.title.x = element_text(size = 16),
+        axis.text.y = element_text(size = 16),
+        axis.title.y = element_text(size = 16))
+```
+
+Let's zoom in:
+
+```{r change_prop_ppv_1.5, fig.width = 12, fig.height = 8}
+ggplot(secondary_data %>% 
+         filter(pi > 0,
+                !method %in% c("Uncorrected 0.025", "Uncorrected 0.05", "Uncorrected 0.1")), 
+       aes(x = pi, y = ppv)) + 
+  geom_line(aes(col = method,
+                linetype = online)) + 
+  geom_ribbon(aes(ymin = lower_ppv, ymax = upper_ppv, fill = method), alpha = 0.2) + 
+  theme_bw() +
+  labs(x = "Proportion of DE Genes",
+       y = "PPV",
+       col = "Method",
+       linetype = "Online?") +
+  scale_color_manual(
+    values = pal,
+    limits = force
+  ) +
+  scale_fill_manual(
+    values = pal
+  ) +
+  guides(fill = "none",
+         color = guide_legend(override.aes = list(size = 12))) +
+  theme(legend.title = element_text(size = 16),
+        legend.text = element_text(size = 16),
+        axis.text.x = element_text(size = 16),
+        axis.title.x = element_text(size = 16),
+        axis.text.y = element_text(size = 16),
+        axis.title.y = element_text(size = 16))
+```
+
+# Reordered Batches
+
+This simulation reflects scenarios where inherently more powerful more batches (higher $\pi$) are followed by regular batches. 
+
+The scenarios were simulated according to the following parameters:
+
+```{r, echo=FALSE}
+tibble(family = rep(50, 5),
+       super_batch = rep(10, 5),
+       super_batch_pi = c(0.3, 0.3, 0.5, 0.5, 0.5),
+       reg_batch = rep(40, 5),
+       reg_batch_pi = c(0.05, 0.275, 0.25, 0.375, 0.5),
+       overall_pi = c(0.1, 0.2, 0.3, 0.4, 0.5))
+```      
+
+```{r, echo=FALSE}
+all_pi_sim_data2 <- map(list.files(path = "change_pi_sim", 
+                                   pattern = "change_pi_run_reorder1.5_",
+                                   full.names = TRUE), readRDS)
+
+primary_means2 <- rbindlist(all_pi_sim_data2)[,lapply(.SD, mean, na.rm = TRUE), list(pi)] %>%
+  select(pi, contains("power")|contains("fdr")) %>%
+  pivot_longer(cols = contains("power"),
+               names_to = "method",
+               names_prefix = "power_",
+               values_to = "power") %>%
+  pivot_longer(cols = contains("fdr"),
+               names_to = "method2",
+               names_prefix = "fdr_",
+               values_to = "fdr")
+
+primary_sds2 <- rbindlist(all_pi_sim_data2)[,lapply(.SD, sd, na.rm = TRUE), list(pi)] %>%
+  select(pi, contains("power")|contains("fdr")) %>%
+  pivot_longer(cols = contains("power"),
+               names_to = "method",
+               names_prefix = "power_",
+               values_to = "power") %>%
+  pivot_longer(cols = contains("fdr"),
+               names_to = "method2",
+               names_prefix = "fdr_",
+               values_to = "fdr") %>%
+  rename(sd_power = power,
+         sd_fdr = fdr)
+
+primary_data2 <- bind_cols(primary_means2, primary_sds2 %>% select(sd_power, sd_fdr)) %>%
+  mutate(lower_power = power - sd_power,
+         upper_power = power + sd_power,
+         lower_fdr = fdr - sd_fdr,
+         upper_fdr = fdr + sd_fdr,
+         method = case_when(method == "0.025" ~ "Uncorrected 0.025",
+                            method == "0.05" ~ "Uncorrected 0.05",
+                            method == "0.1" ~ "Uncorrected 0.1",
+                            method == "off_bh" ~ "Offline BH",
+                            method == "off_stbh" ~ "Offline StBH",
+                            method == "pool_bh" ~ "Pooled BH",
+                            method == "pool_stbh" ~ "Pooled StBH",
+                            method == "on_bh" ~ "BatchBH",
+                            method == "on_prds" ~ "BatchPRDS",
+                            method == "on_stbh" ~ "BatchStBH"),
+         method2 = case_when(method2 == "0.025" ~ "Uncorrected 0.025",
+                             method2 == "0.05" ~ "Uncorrected 0.05",
+                             method2 == "0.1" ~ "Uncorrected 0.1",
+                             method2 == "off_bh" ~ "Offline BH",
+                             method2 == "off_stbh" ~ "Offline StBH",
+                             method2 == "pool_bh" ~ "Pooled BH",
+                             method2 == "pool_stbh" ~ "Pooled StBH",
+                             method2 == "on_bh" ~ "BatchBH",
+                             method2 == "on_prds" ~ "BatchPRDS",
+                             method2 == "on_stbh" ~ "BatchStBH"),
+         online = case_when(str_detect(method, "Batch") ~ "Yes",
+                            TRUE ~ "No"),
+         online2 = case_when(str_detect(method2, "Batch") ~ "Yes",
+                             TRUE ~ "No"))
+```
+
+```{r change_prop_power_reorder1.5_supp, fig.width = 12, fig.height = 8}
+ggplot(primary_data2 %>% filter(pi >= 0.1), aes(x = pi, y = power)) + 
+  geom_line(aes(col = method,
+                linetype = online)) + 
+  geom_ribbon(aes(ymin = lower_power, ymax = upper_power, fill = method), alpha = 0.2) + 
+  theme_bw() + 
+  ylim(c(0.5,1)) + 
+  labs(x = "Proportion of DE Genes",
+       y = "Power",
+       col = "Method",
+       linetype = "Online?") +
+  scale_color_manual(
+    values = pal
+  ) +
+  scale_fill_manual(
+    values = pal
+  ) +
+  guides(fill = "none",
+         color = guide_legend(override.aes = list(size = 12))) +
+  theme(legend.title = element_text(size = 16),
+        legend.text = element_text(size = 16),
+        axis.text.x = element_text(size = 16),
+        axis.title.x = element_text(size = 16),
+        axis.text.y = element_text(size = 16),
+        axis.title.y = element_text(size = 16))
+```
+
+```{r change_prop_power_reorder1.5, fig.width = 12, fig.height = 8}
+ggplot(primary_data2 %>% filter(pi >= 0.1, 
+                                !method %in% c("Uncorrected 0.025", "Uncorrected 0.05", "Uncorrected 0.1")), aes(x = pi, y = power)) + 
+  geom_line(aes(col = method,
+                linetype = online)) + 
+  geom_ribbon(aes(ymin = lower_power, ymax = upper_power, fill = method), alpha = 0.2) + 
+  theme_bw() + 
+  ylim(c(0.5,1)) + 
+  labs(x = "Proportion of DE Genes",
+       y = "Power",
+       col = "Method",
+       linetype = "Online?") +
+  scale_color_manual(
+    values = pal,
+    limits = force
+  ) +
+  scale_fill_manual(
+    values = pal
+  ) +
+  guides(fill = "none",
+         color = guide_legend(override.aes = list(size = 12))) +
+  theme(legend.title = element_text(size = 16),
+        legend.text = element_text(size = 16),
+        axis.text.x = element_text(size = 16),
+        axis.title.x = element_text(size = 16),
+        axis.text.y = element_text(size = 16),
+        axis.title.y = element_text(size = 16))
+```
+
+* It's evident we see that the power gains are substantial compared to the unordered batches
+
+```{r change_prop_fdr_reorder1.5_supp, fig.width = 12, fig.height = 8}
+ggplot(primary_data2 %>% filter(pi >= 0.1), aes(x = pi, y = fdr)) + 
+  geom_line(aes(col = method2,
+                linetype = online2)) + 
+  geom_ribbon(aes(ymin = lower_fdr, ymax = upper_fdr, fill = method2), alpha = 0.2) + 
+  theme_bw() + 
+  geom_hline(yintercept = 0.05, col = "black") +
+  labs(x = "Proportion of DE Genes",
+       y = "FDR",
+       col = "Method",
+       linetype = "Online?") +
+  scale_color_manual(
+    values = pal
+  ) +
+  scale_fill_manual(
+    values = pal
+  ) +
+  guides(fill = "none",
+         color = guide_legend(override.aes = list(size = 12))) +
+  theme(legend.title = element_text(size = 16),
+        legend.text = element_text(size = 16),
+        axis.text.x = element_text(size = 16),
+        axis.title.x = element_text(size = 16),
+        axis.text.y = element_text(size = 16),
+        axis.title.y = element_text(size = 16))
+```
+
+```{r change_prop_fdr_reorder1.5, fig.width = 12, fig.height = 8}
+ggplot(primary_data2 %>% 
+         filter(!method2 %in% c("Uncorrected 0.025", "Uncorrected 0.05", "Uncorrected 0.1"),
+                pi >= 0.1), aes(x = pi, y = fdr)) + 
+  geom_line(aes(col = method2,
+                linetype = online2)) + 
+  geom_ribbon(aes(ymin = lower_fdr, ymax = upper_fdr, fill = method2), alpha = 0.2) + 
+  theme_bw() + 
+  geom_hline(yintercept = 0.05, col = "black") +
+  labs(x = "Proportion of DE Genes",
+       y = "FDR",
+       col = "Method",
+       linetype = "Online?") +
+  scale_color_manual(
+    values = pal,
+    limits = force
+  ) +
+  scale_fill_manual(
+    values = pal
+  ) +
+  guides(fill = "none",
+         color = guide_legend(override.aes = list(size = 12))) +
+  theme(legend.title = element_text(size = 16),
+        legend.text = element_text(size = 16),
+        axis.text.x = element_text(size = 16),
+        axis.title.x = element_text(size = 16),
+        axis.text.y = element_text(size = 16),
+        axis.title.y = element_text(size = 16))
+```
+
+* Although the naive and pooled offline approaches are less variable, we still see that naive may fail to control FDR at nominal level
+* BatchStBH inflates at smaller $\pi$ when batches are "well-ordered" with more powerful datasets in beginning
+
+```{r}
+#prep PPV data
+secondary_means2 <- rbindlist(all_pi_sim_data2)[,lapply(.SD, mean, na.rm = TRUE), list(pi)] %>%
+  select(pi, contains("ppv")) %>%
+  pivot_longer(cols = contains("ppv"),
+               names_to = "method",
+               names_prefix = "ppv_",
+               values_to = "ppv")
+
+secondary_sds2 <- rbindlist(all_pi_sim_data2)[,lapply(.SD, sd, na.rm = TRUE), list(pi)] %>%
+  select(pi, contains("ppv")) %>%
+  pivot_longer(cols = contains("ppv"),
+               names_to = "method",
+               names_prefix = "ppv_",
+               values_to = "ppv") %>%
+  rename(sd_ppv = ppv)
+
+secondary_data2 <- bind_cols(secondary_means2, secondary_sds2 %>% select(sd_ppv)) %>%
+  mutate(lower_ppv = ppv - sd_ppv,
+         upper_ppv = ppv + sd_ppv,
+         method = case_when(method == "0.025" ~ "Uncorrected 0.025",
+                            method == "0.05" ~ "Uncorrected 0.05",
+                            method == "0.1" ~ "Uncorrected 0.1",
+                            method == "off_bh" ~ "Offline BH",
+                            method == "off_stbh" ~ "Offline StBH",
+                            method == "pool_bh" ~ "Pooled BH",
+                            method == "pool_stbh" ~ "Pooled StBH",
+                            method == "on_bh" ~ "BatchBH",
+                            method == "on_prds" ~ "BatchPRDS",
+                            method == "on_stbh" ~ "BatchStBH"),
+         online = case_when(str_detect(method, "Batch") ~ "Yes",
+                            TRUE ~ "No"))
+```
+
+```{r change_prop_ppv_reorder1.5_supp, fig.width = 12, fig.height = 8}
+ggplot(secondary_data2 %>% filter(pi > 0), aes(x = pi, y = ppv)) + 
+  geom_line(aes(col = method,
+                linetype = online)) + 
+  geom_ribbon(aes(ymin = lower_ppv, ymax = upper_ppv, fill = method), alpha = 0.2) + 
+  theme_bw() +
+  labs(x = "Proportion of DE Genes",
+       y = "PPV",
+       col = "Method",
+       linetype = "Online?") +
+  scale_color_manual(
+    values = pal
+  ) +
+  scale_fill_manual(
+    values = pal
+  ) +
+  guides(fill = "none",
+         color = guide_legend(override.aes = list(size = 12))) +
+  theme(legend.title = element_text(size = 16),
+        legend.text = element_text(size = 16),
+        axis.text.x = element_text(size = 16),
+        axis.title.x = element_text(size = 16),
+        axis.text.y = element_text(size = 16),
+        axis.title.y = element_text(size = 16))
+```
+
+Let's zoom in:
+
+```{r change_prop_ppv_reorder1.5, fig.width = 12, fig.height = 8}
+ggplot(secondary_data2 %>% 
+         filter(pi > 0,
+                !method %in% c("Uncorrected 0.025", "Uncorrected 0.05", "Uncorrected 0.1")), 
+       aes(x = pi, y = ppv)) + 
+  geom_line(aes(col = method,
+                linetype = online)) + 
+  geom_ribbon(aes(ymin = lower_ppv, ymax = upper_ppv, fill = method), alpha = 0.2) + 
+  theme_bw() +
+  labs(x = "Proportion of DE Genes",
+       y = "PPV",
+       col = "Method",
+       linetype = "Online?") +
+  scale_color_manual(
+    values = pal,
+    limits = force
+  ) +
+  scale_fill_manual(
+    values = pal
+  ) +
+  guides(fill = "none",
+         color = guide_legend(override.aes = list(size = 12))) +
+  theme(legend.title = element_text(size = 16),
+        legend.text = element_text(size = 16),
+        axis.text.x = element_text(size = 16),
+        axis.title.x = element_text(size = 16),
+        axis.text.y = element_text(size = 16),
+        axis.title.y = element_text(size = 16))
+```
