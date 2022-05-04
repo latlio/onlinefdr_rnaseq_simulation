@@ -18,8 +18,8 @@ library(ggsci)
 
 #load data
 all_pi_sim_data <- map(list.files(path = "change_pi_sim", 
-                          pattern = "change_pi_run_fc1.5",
-                          full.names = TRUE), readRDS)
+                                  pattern = "change_pi_run_fc1.5",
+                                  full.names = TRUE), readRDS)
 
 # Data Key
 ## primary = power, fdr
@@ -37,9 +37,9 @@ primary_means <- rbindlist(all_pi_sim_data)[,lapply(.SD, mean, na.rm = TRUE), li
                names_prefix = "fdr_",
                values_to = "fdr")
 
-primary_sds <- rbindlist(all_pi_sim_data)[,lapply(.SD, sd, na.rm = TRUE), list(pi)] %>%
-    select(pi, contains("power")|contains("fdr")) %>%
-    pivot_longer(cols = contains("power"),
+primary_lower_bounds <- rbindlist(all_pi_sim_data)[,lapply(.SD, quantile, probs = 0.025, na.rm = TRUE), list(pi)] %>%
+  select(pi, contains("power")|contains("fdr")) %>%
+  pivot_longer(cols = contains("power"),
                names_to = "method",
                names_prefix = "power_",
                values_to = "power") %>%
@@ -47,15 +47,39 @@ primary_sds <- rbindlist(all_pi_sim_data)[,lapply(.SD, sd, na.rm = TRUE), list(p
                names_to = "method2",
                names_prefix = "fdr_",
                values_to = "fdr") %>%
-  rename(sd_power = power,
-         sd_fdr = fdr)
+  rename(lower_power = power,
+         lower_fdr = fdr)
 
-primary_data <- bind_cols(primary_means, primary_sds %>% select(sd_power, sd_fdr)) %>%
-  mutate(lower_power = power - sd_power,
-         upper_power = power + sd_power,
-         lower_fdr = fdr - sd_fdr,
-         upper_fdr = fdr + sd_fdr,
-         method = case_when(method == "0.025" ~ "Uncorrected 0.025",
+primary_upper_bounds <- rbindlist(all_pi_sim_data)[,lapply(.SD, quantile, probs = 0.975, na.rm = TRUE), list(pi)] %>%
+  select(pi, contains("power")|contains("fdr")) %>%
+  pivot_longer(cols = contains("power"),
+               names_to = "method",
+               names_prefix = "power_",
+               values_to = "power") %>%
+  pivot_longer(cols = contains("fdr"),
+               names_to = "method2",
+               names_prefix = "fdr_",
+               values_to = "fdr") %>%
+  rename(upper_power = power,
+         upper_fdr = fdr)
+
+# primary_sds <- rbindlist(all_pi_sim_data)[,lapply(.SD, sd, na.rm = TRUE), list(pi)] %>%
+#     select(pi, contains("power")|contains("fdr")) %>%
+#     pivot_longer(cols = contains("power"),
+#                names_to = "method",
+#                names_prefix = "power_",
+#                values_to = "power") %>%
+#   pivot_longer(cols = contains("fdr"),
+#                names_to = "method2",
+#                names_prefix = "fdr_",
+#                values_to = "fdr") %>%
+#   rename(sd_power = power,
+#          sd_fdr = fdr)
+
+primary_data <- bind_cols(primary_means,
+                          primary_lower_bounds %>% select(lower_power, lower_fdr),
+                          primary_upper_bounds %>% select(upper_power, upper_fdr)) %>%
+  mutate(method = case_when(method == "0.025" ~ "Uncorrected 0.025",
                             method == "0.05" ~ "Uncorrected 0.05",
                             method == "0.1" ~ "Uncorrected 0.1",
                             method == "off_bh" ~ "Offline BH",
@@ -75,14 +99,19 @@ primary_data <- bind_cols(primary_means, primary_sds %>% select(sd_power, sd_fdr
                              method2 == "on_bh" ~ "BatchBH",
                              method2 == "on_prds" ~ "BatchPRDS",
                              method2 == "on_stbh" ~ "BatchStBH"),
-         online = as.factor(case_when(str_detect(method, "Batch") ~ "Yes",
-                            TRUE ~ "No")),
-         online2 = as.factor(case_when(str_detect(method2, "Batch") ~ "Yes",
-                            TRUE ~ "No")))
+         method_type = as.factor(case_when(str_detect(method, "Batch") ~ "Batch",
+                                           str_detect(method, "Pooled") ~ "Pooled",
+                                           str_detect(method, "Offline") ~ "Offline",
+                                           str_detect(method, "Uncorrected") ~ "Uncorrected")),
+         method_type2 = as.factor(case_when(str_detect(method2, "Batch") ~ "Batch",
+                                            str_detect(method2, "Pooled") ~ "Pooled",
+                                            str_detect(method2, "Offline") ~ "Offline",
+                                            str_detect(method2, "Uncorrected") ~ "Uncorrected"))
+  )
 
 # Set consistent Color Palette
 
-pal <- c("#C0392B", "#2980B9", "#EC7063", "#9B59B6", "#3498DB", "#F1C40F", "#16A085", "red", "#E67E22", "#34495E") %>%
+pal <- c("#C0392B", "#2980B9", "#EC7063", "#9B59B6", "#3498DB", "hotpink", "#16A085", "red", "#E67E22", "#34495E") %>%
   setNames(unique(primary_data$method))
 
 # pal <- pal_npg("nrc")(10) %>%
@@ -90,6 +119,18 @@ pal <- c("#C0392B", "#2980B9", "#EC7063", "#9B59B6", "#3498DB", "#F1C40F", "#16A
 # 
 # pal <- scales::hue_pal()(10) %>% 
 #   setNames(unique(primary_data$method))
+
+# Set consistent plot theme
+theme_gen <- function() {
+  theme_bw() %+replace%
+    theme(
+      legend.title = element_text(size = rel(1.5), face = "bold"),
+      legend.text = element_text(size = rel(1)),
+      legend.title.align = 0,
+      axis.title = element_text(size = rel(1.5), face = "bold"),
+      axis.text = element_text(size = rel(1))
+    )
+}
 ```
 
 # Simulation Settings
@@ -106,58 +147,56 @@ pal <- c("#C0392B", "#2980B9", "#EC7063", "#9B59B6", "#3498DB", "#F1C40F", "#16A
 ```{r change_prop_power_1.5_supp, fig.width = 12, fig.height = 8}
 ggplot(primary_data, aes(x = pi, y = power)) + 
   geom_line(aes(col = method,
-                linetype = online)) + 
+                linetype = method_type),
+            size = 1) + 
   geom_ribbon(aes(ymin = lower_power, ymax = upper_power, fill = method), alpha = 0.2) + 
   theme_bw() + 
   ylim(c(0,1)) + 
   labs(x = "Proportion of DE Genes",
        y = "Power",
        col = "Method",
-       linetype = "Online?") +
+       linetype = "Method Type") +
   scale_color_manual(
-    values = pal
+    values = pal,
+    limits = force
+  ) +
+  scale_linetype_discrete(
+    limits = force
   ) +
   scale_fill_manual(
     values = pal
-  ) +
-  guides(fill = "none",
-         color = guide_legend(override.aes = list(size = 12))) +
-  theme(legend.title = element_text(size = 16),
-        legend.text = element_text(size = 16),
-        axis.text.x = element_text(size = 16),
-        axis.title.x = element_text(size = 16),
-        axis.text.y = element_text(size = 16),
-        axis.title.y = element_text(size = 16))
+  ) + 
+  guides(fill = "none") +
+  theme_gen()
 ```
+
 ```{r change_prop_power_1.5_supp2, fig.width = 12, fig.height = 8}
 ggplot(primary_data %>%
          filter(!method %in% c("Uncorrected 0.025", "Uncorrected 0.05", "Uncorrected 0.1", "BatchPRDS")),
        aes(x = pi, y = power)) + 
   geom_line(aes(col = method,
-                linetype = online)) + 
+                linetype = method_type),
+            size = 1) + 
   geom_ribbon(aes(ymin = lower_power, ymax = upper_power, fill = method), alpha = 0.2) + 
   theme_bw() + 
   labs(x = "Proportion of DE Genes",
        y = "Power",
        col = "Method",
-       linetype = "Online?") +
+       linetype = "Method Type") +
   scale_color_manual(
     values = pal,
+    limits = force
+  ) +
+  scale_linetype_discrete(
     limits = force
   ) +
   scale_fill_manual(
     values = pal
   ) +
-  guides(fill = "none",
-         color = guide_legend(override.aes = list(size = 12))) +
+  guides(fill = "none") +
   xlim(0.1, 0.5) +
   ylim(0.65, 0.9) +
-  theme(legend.title = element_text(size = 16),
-        legend.text = element_text(size = 16),
-        axis.text.x = element_text(size = 16),
-        axis.title.x = element_text(size = 16),
-        axis.text.y = element_text(size = 16),
-        axis.title.y = element_text(size = 16))
+  theme_gen()
 ```
 
 ```{r change_prop_power_1.5, fig.width = 12, fig.height = 8}
@@ -165,13 +204,14 @@ ggplot(primary_data %>%
          filter(!method %in% c("Uncorrected 0.025", "Uncorrected 0.05", "Uncorrected 0.1")),
        aes(x = pi, y = power)) + 
   geom_line(aes(col = method,
-                linetype = online)) + 
+                linetype = method_type),
+            size = 1) + 
   geom_ribbon(aes(ymin = lower_power, ymax = upper_power, fill = method), alpha = 0.2) + 
   theme_bw() + 
   labs(x = "Proportion of DE Genes",
        y = "Power",
        col = "Method",
-       linetype = "Online?") +
+       linetype = "Method Type") +
   scale_color_manual(
     values = pal,
     limits = force
@@ -179,14 +219,11 @@ ggplot(primary_data %>%
   scale_fill_manual(
     values = pal
   ) +
-  guides(fill = "none",
-         color = guide_legend(override.aes = list(size = 12))) +
-  theme(legend.title = element_text(size = 16),
-        legend.text = element_text(size = 16),
-        axis.text.x = element_text(size = 16),
-        axis.title.x = element_text(size = 16),
-        axis.text.y = element_text(size = 16),
-        axis.title.y = element_text(size = 16))
+  scale_linetype_discrete(
+    limits = force
+  ) +
+  guides(fill = "none") +
+  theme_gen()
 ```
 
 Observations:
@@ -200,28 +237,26 @@ Observations:
 ```{r change_prop_fdr_1.5_supp, fig.width = 12, fig.height = 8}
 ggplot(primary_data %>% filter(pi > 0), aes(x = pi, y = fdr)) + 
   geom_line(aes(col = method2,
-                linetype = online2)) + 
+                linetype = method_type2),
+            size = 1) + 
   geom_ribbon(aes(ymin = lower_fdr, ymax = upper_fdr, fill = method2), alpha = 0.2) + 
   theme_bw() + 
   geom_hline(yintercept = 0.05, col = "black") +
   labs(x = "Proportion of DE Genes",
        y = "FDR",
        col = "Method",
-       linetype = "Online?") +
+       linetype = "Method Type") +
   scale_color_manual(
     values = pal
   ) +
   scale_fill_manual(
     values = pal
   ) +
-  guides(fill = "none",
-         color = guide_legend(override.aes = list(size = 12))) +
-  theme(legend.title = element_text(size = 16),
-        legend.text = element_text(size = 16),
-        axis.text.x = element_text(size = 16),
-        axis.title.x = element_text(size = 16),
-        axis.text.y = element_text(size = 16),
-        axis.title.y = element_text(size = 16))
+  scale_linetype_discrete(
+    limits = force
+  ) +
+  guides(fill = "none") +
+  theme_gen()
 ```
 
 Let's zoom in:
@@ -231,14 +266,15 @@ ggplot(primary_data %>%
          filter(!method2 %in% c("Uncorrected 0.025", "Uncorrected 0.05", "Uncorrected 0.1"),
                 pi != 0), aes(x = pi, y = fdr)) + 
   geom_line(aes(col = method2,
-                linetype = online2)) + 
+                linetype = method_type2),
+            size = 1) + 
   geom_ribbon(aes(ymin = lower_fdr, ymax = upper_fdr, fill = method2), alpha = 0.2) + 
   theme_bw() + 
   geom_hline(yintercept = 0.05, col = "black") +
   labs(x = "Proportion of DE Genes",
        y = "FDR",
        col = "Method",
-       linetype = "Online?") +
+       linetype = "Method Type") +
   scale_color_manual(
     values = pal,
     limits = force
@@ -246,14 +282,11 @@ ggplot(primary_data %>%
   scale_fill_manual(
     values = pal
   ) +
-  guides(fill = "none",
-         color = guide_legend(override.aes = list(size = 12))) +
-  theme(legend.title = element_text(size = 16),
-        legend.text = element_text(size = 16),
-        axis.text.x = element_text(size = 16),
-        axis.title.x = element_text(size = 16),
-        axis.text.y = element_text(size = 16),
-        axis.title.y = element_text(size = 16))
+  scale_linetype_discrete(
+    limits = force
+  ) +
+  guides(fill = "none") +
+  theme_gen()
 ```
 
 Observations:
@@ -274,18 +307,34 @@ secondary_means <- rbindlist(all_pi_sim_data)[,lapply(.SD, mean, na.rm = TRUE), 
                names_prefix = "ppv_",
                values_to = "ppv")
 
-secondary_sds <- rbindlist(all_pi_sim_data)[,lapply(.SD, sd, na.rm = TRUE), list(pi)] %>%
+secondary_lower_bounds <- rbindlist(all_pi_sim_data)[,lapply(.SD, quantile, probs = 0.025, na.rm = TRUE), list(pi)] %>%
   select(pi, contains("ppv")) %>%
   pivot_longer(cols = contains("ppv"),
                names_to = "method",
                names_prefix = "ppv_",
                values_to = "ppv") %>%
-  rename(sd_ppv = ppv)
+  rename(lower_ppv = ppv)
 
-secondary_data <- bind_cols(secondary_means, secondary_sds %>% select(sd_ppv)) %>%
-  mutate(lower_ppv = ppv - sd_ppv,
-         upper_ppv = ppv + sd_ppv,
-         method = case_when(method == "0.025" ~ "Uncorrected 0.025",
+secondary_upper_bounds <- rbindlist(all_pi_sim_data)[,lapply(.SD, quantile, probs = 0.975, na.rm = TRUE), list(pi)] %>%
+  select(pi, contains("ppv")) %>%
+  pivot_longer(cols = contains("ppv"),
+               names_to = "method",
+               names_prefix = "ppv_",
+               values_to = "ppv") %>%
+  rename(upper_ppv = ppv)
+
+# secondary_sds <- rbindlist(all_pi_sim_data)[,lapply(.SD, sd, na.rm = TRUE), list(pi)] %>%
+#   select(pi, contains("ppv")) %>%
+#   pivot_longer(cols = contains("ppv"),
+#                names_to = "method",
+#                names_prefix = "ppv_",
+#                values_to = "ppv") %>%
+#   rename(sd_ppv = ppv)
+
+secondary_data <- bind_cols(secondary_means, 
+                            secondary_lower_bounds %>% select(lower_ppv),
+                            secondary_upper_bounds %>% select(upper_ppv)) %>%
+  mutate(method = case_when(method == "0.025" ~ "Uncorrected 0.025",
                             method == "0.05" ~ "Uncorrected 0.05",
                             method == "0.1" ~ "Uncorrected 0.1",
                             method == "off_bh" ~ "Offline BH",
@@ -295,34 +344,35 @@ secondary_data <- bind_cols(secondary_means, secondary_sds %>% select(sd_ppv)) %
                             method == "on_bh" ~ "BatchBH",
                             method == "on_prds" ~ "BatchPRDS",
                             method == "on_stbh" ~ "BatchStBH"),
-         online = case_when(str_detect(method, "Batch") ~ "Yes",
-                            TRUE ~ "No"))
+         method_type = as.factor(case_when(str_detect(method, "Batch") ~ "Batch",
+                                           str_detect(method, "Pooled") ~ "Pooled",
+                                           str_detect(method, "Offline") ~ "Offline",
+                                           str_detect(method, "Uncorrected") ~ "Uncorrected"))
+  )
 ```
 
 ```{r change_prop_ppv_1.5_supp, fig.width = 12, fig.height = 8}
 ggplot(secondary_data %>% filter(pi > 0), aes(x = pi, y = ppv)) + 
   geom_line(aes(col = method,
-                linetype = online)) + 
+                linetype = method_type),
+            size = 1) + 
   geom_ribbon(aes(ymin = lower_ppv, ymax = upper_ppv, fill = method), alpha = 0.2) + 
   theme_bw() +
   labs(x = "Proportion of DE Genes",
        y = "PPV",
        col = "Method",
-       linetype = "Online?") +
+       linetype = "Method Type") +
   scale_color_manual(
     values = pal
   ) +
   scale_fill_manual(
     values = pal
   ) +
-  guides(fill = "none",
-         color = guide_legend(override.aes = list(size = 12))) +
-  theme(legend.title = element_text(size = 16),
-        legend.text = element_text(size = 16),
-        axis.text.x = element_text(size = 16),
-        axis.title.x = element_text(size = 16),
-        axis.text.y = element_text(size = 16),
-        axis.title.y = element_text(size = 16))
+  scale_linetype_discrete(
+    limits = force
+  ) +
+  guides(fill = "none") +
+  theme_gen()
 ```
 
 Let's zoom in:
@@ -333,13 +383,14 @@ ggplot(secondary_data %>%
                 !method %in% c("Uncorrected 0.025", "Uncorrected 0.05", "Uncorrected 0.1")), 
        aes(x = pi, y = ppv)) + 
   geom_line(aes(col = method,
-                linetype = online)) + 
+                linetype = method_type),
+            size = 1) + 
   geom_ribbon(aes(ymin = lower_ppv, ymax = upper_ppv, fill = method), alpha = 0.2) + 
   theme_bw() +
   labs(x = "Proportion of DE Genes",
        y = "PPV",
        col = "Method",
-       linetype = "Online?") +
+       linetype = "Method Type") +
   scale_color_manual(
     values = pal,
     limits = force
@@ -347,14 +398,11 @@ ggplot(secondary_data %>%
   scale_fill_manual(
     values = pal
   ) +
-  guides(fill = "none",
-         color = guide_legend(override.aes = list(size = 12))) +
-  theme(legend.title = element_text(size = 16),
-        legend.text = element_text(size = 16),
-        axis.text.x = element_text(size = 16),
-        axis.title.x = element_text(size = 16),
-        axis.text.y = element_text(size = 16),
-        axis.title.y = element_text(size = 16))
+  scale_linetype_discrete(
+    limits = force
+  ) +
+  guides(fill = "none") +
+  theme_gen()
 ```
 
 # Reordered Batches
@@ -388,7 +436,7 @@ primary_means2 <- rbindlist(all_pi_sim_data2)[,lapply(.SD, mean, na.rm = TRUE), 
                names_prefix = "fdr_",
                values_to = "fdr")
 
-primary_sds2 <- rbindlist(all_pi_sim_data2)[,lapply(.SD, sd, na.rm = TRUE), list(pi)] %>%
+primary_lower_bounds2 <- rbindlist(all_pi_sim_data2)[,lapply(.SD, quantile, probs = 0.025, na.rm = TRUE), list(pi)] %>%
   select(pi, contains("power")|contains("fdr")) %>%
   pivot_longer(cols = contains("power"),
                names_to = "method",
@@ -398,15 +446,26 @@ primary_sds2 <- rbindlist(all_pi_sim_data2)[,lapply(.SD, sd, na.rm = TRUE), list
                names_to = "method2",
                names_prefix = "fdr_",
                values_to = "fdr") %>%
-  rename(sd_power = power,
-         sd_fdr = fdr)
+  rename(lower_power = power,
+         lower_fdr = fdr)
 
-primary_data2 <- bind_cols(primary_means2, primary_sds2 %>% select(sd_power, sd_fdr)) %>%
-  mutate(lower_power = power - sd_power,
-         upper_power = power + sd_power,
-         lower_fdr = fdr - sd_fdr,
-         upper_fdr = fdr + sd_fdr,
-         method = case_when(method == "0.025" ~ "Uncorrected 0.025",
+primary_upper_bounds2 <- rbindlist(all_pi_sim_data2)[,lapply(.SD, quantile, probs = 0.975, na.rm = TRUE), list(pi)] %>%
+  select(pi, contains("power")|contains("fdr")) %>%
+  pivot_longer(cols = contains("power"),
+               names_to = "method",
+               names_prefix = "power_",
+               values_to = "power") %>%
+  pivot_longer(cols = contains("fdr"),
+               names_to = "method2",
+               names_prefix = "fdr_",
+               values_to = "fdr") %>%
+  rename(upper_power = power,
+         upper_fdr = fdr)
+
+primary_data2 <- bind_cols(primary_means2,
+                           primary_lower_bounds2 %>% select(lower_power, lower_fdr),
+                           primary_upper_bounds2 %>% select(upper_power, upper_fdr)) %>%
+  mutate(method = case_when(method == "0.025" ~ "Uncorrected 0.025",
                             method == "0.05" ~ "Uncorrected 0.05",
                             method == "0.1" ~ "Uncorrected 0.1",
                             method == "off_bh" ~ "Offline BH",
@@ -426,51 +485,56 @@ primary_data2 <- bind_cols(primary_means2, primary_sds2 %>% select(sd_power, sd_
                              method2 == "on_bh" ~ "BatchBH",
                              method2 == "on_prds" ~ "BatchPRDS",
                              method2 == "on_stbh" ~ "BatchStBH"),
-         online = case_when(str_detect(method, "Batch") ~ "Yes",
-                            TRUE ~ "No"),
-         online2 = case_when(str_detect(method2, "Batch") ~ "Yes",
-                             TRUE ~ "No"))
+         method_type = as.factor(case_when(str_detect(method, "Batch") ~ "Batch",
+                                           str_detect(method, "Pooled") ~ "Pooled",
+                                           str_detect(method, "Offline") ~ "Offline",
+                                           str_detect(method, "Uncorrected") ~ "Uncorrected")),
+         method_type2 = as.factor(case_when(str_detect(method2, "Batch") ~ "Batch",
+                                            str_detect(method2, "Pooled") ~ "Pooled",
+                                            str_detect(method2, "Offline") ~ "Offline",
+                                            str_detect(method2, "Uncorrected") ~ "Uncorrected"))
+  )
 ```
 
 ```{r change_prop_power_reorder1.5_supp, fig.width = 12, fig.height = 8}
 ggplot(primary_data2 %>% filter(pi >= 0.1), aes(x = pi, y = power)) + 
   geom_line(aes(col = method,
-                linetype = online)) + 
+                linetype = method_type),
+            size = 1) + 
   geom_ribbon(aes(ymin = lower_power, ymax = upper_power, fill = method), alpha = 0.2) + 
   theme_bw() + 
   ylim(c(0.5,1)) + 
   labs(x = "Proportion of DE Genes",
        y = "Power",
        col = "Method",
-       linetype = "Online?") +
+       linetype = "Method Type") +
   scale_color_manual(
     values = pal
   ) +
   scale_fill_manual(
     values = pal
   ) +
-  guides(fill = "none",
-         color = guide_legend(override.aes = list(size = 12))) +
-  theme(legend.title = element_text(size = 16),
-        legend.text = element_text(size = 16),
-        axis.text.x = element_text(size = 16),
-        axis.title.x = element_text(size = 16),
-        axis.text.y = element_text(size = 16),
-        axis.title.y = element_text(size = 16))
+  scale_linetype_discrete(
+    limits = force
+  ) +
+  guides(fill = "none") +
+  theme_gen()
 ```
 
 ```{r change_prop_power_reorder1.5, fig.width = 12, fig.height = 8}
 ggplot(primary_data2 %>% filter(pi >= 0.1, 
-                                !method %in% c("Uncorrected 0.025", "Uncorrected 0.05", "Uncorrected 0.1")), aes(x = pi, y = power)) + 
+                                !method %in% c("Uncorrected 0.025", "Uncorrected 0.05", "Uncorrected 0.1")), 
+       aes(x = pi, y = power)) + 
   geom_line(aes(col = method,
-                linetype = online)) + 
+                linetype = method_type),
+            size = 1) + 
   geom_ribbon(aes(ymin = lower_power, ymax = upper_power, fill = method), alpha = 0.2) + 
   theme_bw() + 
   ylim(c(0.5,1)) + 
   labs(x = "Proportion of DE Genes",
        y = "Power",
        col = "Method",
-       linetype = "Online?") +
+       linetype = "Method Type") +
   scale_color_manual(
     values = pal,
     limits = force
@@ -478,14 +542,11 @@ ggplot(primary_data2 %>% filter(pi >= 0.1,
   scale_fill_manual(
     values = pal
   ) +
-  guides(fill = "none",
-         color = guide_legend(override.aes = list(size = 12))) +
-  theme(legend.title = element_text(size = 16),
-        legend.text = element_text(size = 16),
-        axis.text.x = element_text(size = 16),
-        axis.title.x = element_text(size = 16),
-        axis.text.y = element_text(size = 16),
-        axis.title.y = element_text(size = 16))
+  scale_linetype_discrete(
+    limits = force
+  ) +
+  guides(fill = "none") +
+  theme_gen()
 ```
 
 * It's evident we see that the power gains are substantial compared to the unordered batches
@@ -493,28 +554,26 @@ ggplot(primary_data2 %>% filter(pi >= 0.1,
 ```{r change_prop_fdr_reorder1.5_supp, fig.width = 12, fig.height = 8}
 ggplot(primary_data2 %>% filter(pi >= 0.1), aes(x = pi, y = fdr)) + 
   geom_line(aes(col = method2,
-                linetype = online2)) + 
+                linetype = method_type2),
+            size = 1) + 
   geom_ribbon(aes(ymin = lower_fdr, ymax = upper_fdr, fill = method2), alpha = 0.2) + 
   theme_bw() + 
   geom_hline(yintercept = 0.05, col = "black") +
   labs(x = "Proportion of DE Genes",
        y = "FDR",
        col = "Method",
-       linetype = "Online?") +
+       linetype = "Method Type") +
   scale_color_manual(
     values = pal
   ) +
   scale_fill_manual(
     values = pal
   ) +
-  guides(fill = "none",
-         color = guide_legend(override.aes = list(size = 12))) +
-  theme(legend.title = element_text(size = 16),
-        legend.text = element_text(size = 16),
-        axis.text.x = element_text(size = 16),
-        axis.title.x = element_text(size = 16),
-        axis.text.y = element_text(size = 16),
-        axis.title.y = element_text(size = 16))
+  scale_linetype_discrete(
+    limits = force
+  ) +
+  guides(fill = "none") +
+  theme_gen()
 ```
 
 ```{r change_prop_fdr_reorder1.5, fig.width = 12, fig.height = 8}
@@ -522,14 +581,15 @@ ggplot(primary_data2 %>%
          filter(!method2 %in% c("Uncorrected 0.025", "Uncorrected 0.05", "Uncorrected 0.1"),
                 pi >= 0.1), aes(x = pi, y = fdr)) + 
   geom_line(aes(col = method2,
-                linetype = online2)) + 
+                linetype = method_type2),
+            size = 1) + 
   geom_ribbon(aes(ymin = lower_fdr, ymax = upper_fdr, fill = method2), alpha = 0.2) + 
   theme_bw() + 
   geom_hline(yintercept = 0.05, col = "black") +
   labs(x = "Proportion of DE Genes",
        y = "FDR",
        col = "Method",
-       linetype = "Online?") +
+       linetype = "Method Type") +
   scale_color_manual(
     values = pal,
     limits = force
@@ -537,14 +597,11 @@ ggplot(primary_data2 %>%
   scale_fill_manual(
     values = pal
   ) +
-  guides(fill = "none",
-         color = guide_legend(override.aes = list(size = 12))) +
-  theme(legend.title = element_text(size = 16),
-        legend.text = element_text(size = 16),
-        axis.text.x = element_text(size = 16),
-        axis.title.x = element_text(size = 16),
-        axis.text.y = element_text(size = 16),
-        axis.title.y = element_text(size = 16))
+  scale_linetype_discrete(
+    limits = force
+  ) +
+  guides(fill = "none") +
+  theme_gen()
 ```
 
 * Although the naive and pooled offline approaches are less variable, we still see that naive may fail to control FDR at nominal level
@@ -559,18 +616,26 @@ secondary_means2 <- rbindlist(all_pi_sim_data2)[,lapply(.SD, mean, na.rm = TRUE)
                names_prefix = "ppv_",
                values_to = "ppv")
 
-secondary_sds2 <- rbindlist(all_pi_sim_data2)[,lapply(.SD, sd, na.rm = TRUE), list(pi)] %>%
+secondary_lower_bounds2 <- rbindlist(all_pi_sim_data2)[,lapply(.SD, quantile, probs = 0.025, na.rm = TRUE), list(pi)] %>%
   select(pi, contains("ppv")) %>%
   pivot_longer(cols = contains("ppv"),
                names_to = "method",
                names_prefix = "ppv_",
                values_to = "ppv") %>%
-  rename(sd_ppv = ppv)
+  rename(lower_ppv = ppv)
 
-secondary_data2 <- bind_cols(secondary_means2, secondary_sds2 %>% select(sd_ppv)) %>%
-  mutate(lower_ppv = ppv - sd_ppv,
-         upper_ppv = ppv + sd_ppv,
-         method = case_when(method == "0.025" ~ "Uncorrected 0.025",
+secondary_upper_bounds2 <- rbindlist(all_pi_sim_data2)[,lapply(.SD, quantile, probs = 0.975, na.rm = TRUE), list(pi)] %>%
+  select(pi, contains("ppv")) %>%
+  pivot_longer(cols = contains("ppv"),
+               names_to = "method",
+               names_prefix = "ppv_",
+               values_to = "ppv") %>%
+  rename(upper_ppv = ppv)
+
+secondary_data2 <- bind_cols(secondary_means2, 
+                             secondary_lower_bounds2 %>% select(lower_ppv),
+                             secondary_upper_bounds2 %>% select(upper_ppv)) %>%
+  mutate(method = case_when(method == "0.025" ~ "Uncorrected 0.025",
                             method == "0.05" ~ "Uncorrected 0.05",
                             method == "0.1" ~ "Uncorrected 0.1",
                             method == "off_bh" ~ "Offline BH",
@@ -580,34 +645,35 @@ secondary_data2 <- bind_cols(secondary_means2, secondary_sds2 %>% select(sd_ppv)
                             method == "on_bh" ~ "BatchBH",
                             method == "on_prds" ~ "BatchPRDS",
                             method == "on_stbh" ~ "BatchStBH"),
-         online = case_when(str_detect(method, "Batch") ~ "Yes",
-                            TRUE ~ "No"))
+         method_type = as.factor(case_when(str_detect(method, "Batch") ~ "Batch",
+                                           str_detect(method, "Pooled") ~ "Pooled",
+                                           str_detect(method, "Offline") ~ "Offline",
+                                           str_detect(method, "Uncorrected") ~ "Uncorrected"))
+  )
 ```
 
 ```{r change_prop_ppv_reorder1.5_supp, fig.width = 12, fig.height = 8}
 ggplot(secondary_data2 %>% filter(pi > 0), aes(x = pi, y = ppv)) + 
   geom_line(aes(col = method,
-                linetype = online)) + 
+                linetype = method_type),
+            size = 1) + 
   geom_ribbon(aes(ymin = lower_ppv, ymax = upper_ppv, fill = method), alpha = 0.2) + 
   theme_bw() +
   labs(x = "Proportion of DE Genes",
        y = "PPV",
        col = "Method",
-       linetype = "Online?") +
+       linetype = "Method Type") +
   scale_color_manual(
     values = pal
   ) +
   scale_fill_manual(
     values = pal
   ) +
-  guides(fill = "none",
-         color = guide_legend(override.aes = list(size = 12))) +
-  theme(legend.title = element_text(size = 16),
-        legend.text = element_text(size = 16),
-        axis.text.x = element_text(size = 16),
-        axis.title.x = element_text(size = 16),
-        axis.text.y = element_text(size = 16),
-        axis.title.y = element_text(size = 16))
+  scale_linetype_discrete(
+    limits = force
+  ) +
+  guides(fill = "none") +
+  theme_gen()
 ```
 
 Let's zoom in:
@@ -618,13 +684,14 @@ ggplot(secondary_data2 %>%
                 !method %in% c("Uncorrected 0.025", "Uncorrected 0.05", "Uncorrected 0.1")), 
        aes(x = pi, y = ppv)) + 
   geom_line(aes(col = method,
-                linetype = online)) + 
+                linetype = method_type),
+            size = 1) + 
   geom_ribbon(aes(ymin = lower_ppv, ymax = upper_ppv, fill = method), alpha = 0.2) + 
   theme_bw() +
   labs(x = "Proportion of DE Genes",
        y = "PPV",
        col = "Method",
-       linetype = "Online?") +
+       linetype = "Method Type") +
   scale_color_manual(
     values = pal,
     limits = force
@@ -632,12 +699,9 @@ ggplot(secondary_data2 %>%
   scale_fill_manual(
     values = pal
   ) +
-  guides(fill = "none",
-         color = guide_legend(override.aes = list(size = 12))) +
-  theme(legend.title = element_text(size = 16),
-        legend.text = element_text(size = 16),
-        axis.text.x = element_text(size = 16),
-        axis.title.x = element_text(size = 16),
-        axis.text.y = element_text(size = 16),
-        axis.title.y = element_text(size = 16))
+  scale_linetype_discrete(
+    limits = force
+  ) +
+  guides(fill = "none") +
+  theme_gen()
 ```
