@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 #$ -cwd -V -b y
-#$ -P normal
+#$ -P vlong
 #$ -o tmp.out -e tmp.err
 #
 
